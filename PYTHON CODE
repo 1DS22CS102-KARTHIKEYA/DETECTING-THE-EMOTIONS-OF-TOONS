@@ -1,0 +1,98 @@
+!pip install gradio
+# Install required packages (run once)
+!pip install tensorflow scikit-learn matplotlib seaborn gradio --quiet
+
+import tensorflow as tf
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+from sklearn.metrics import classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+import gradio as gr
+import os
+
+image_dir = "/content/emotion"
+
+
+img_size = 128
+batch_size = 32
+
+datagen = ImageDataGenerator(rescale=1./255, validation_split=0.2)
+
+train_gen = datagen.flow_from_directory(
+    image_dir,
+    target_size=(img_size, img_size),
+    batch_size=batch_size,
+    class_mode='categorical',
+    subset='training'
+)
+
+val_gen = datagen.flow_from_directory(
+    image_dir,
+    target_size=(img_size, img_size),
+    batch_size=batch_size,
+    class_mode='categorical',
+    subset='validation'
+)
+
+class_names = list(train_gen.class_indices.keys())
+
+model = Sequential([
+    Conv2D(32, (3,3), activation='relu', input_shape=(img_size, img_size, 3)),
+    MaxPooling2D(2,2),
+    Conv2D(64, (3,3), activation='relu'),
+    MaxPooling2D(2,2),
+    Conv2D(128, (3,3), activation='relu'),
+    MaxPooling2D(2,2),
+    Flatten(),
+    Dense(128, activation='relu'),
+    Dropout(0.4),
+    Dense(train_gen.num_classes, activation='softmax')
+])
+
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+epochs = 10
+model.fit(train_gen, epochs=epochs, validation_data=val_gen)
+
+val_gen.reset()
+y_true = val_gen.classes
+y_pred = model.predict(val_gen)
+y_pred_classes = np.argmax(y_pred, axis=1)
+
+val_class_indices = val_gen.class_indices
+inv_map = {v: k for k, v in val_class_indices.items()}
+labels_in_val = [inv_map[i] for i in sorted(set(y_true))]
+
+print("\nClassification Report:\n")
+print(classification_report(y_true, y_pred_classes, target_names=labels_in_val))
+
+cm = confusion_matrix(y_true, y_pred_classes)
+plt.figure(figsize=(8,6))
+sns.heatmap(cm, annot=True, fmt='d', xticklabels=labels_in_val, yticklabels=labels_in_val, cmap="Blues")
+plt.xlabel("Predicted")
+plt.ylabel("True")
+plt.title("Confusion Matrix")
+plt.show()
+
+def predict_emotion(image):
+    image = tf.image.resize(image, (img_size, img_size))
+    image = image / 255.0
+    image = np.expand_dims(image, axis=0)
+    prediction = model.predict(image)
+    class_idx = np.argmax(prediction)
+    emotion = class_names[class_idx]
+    confidence = prediction[0][class_idx]
+    return f"{emotion.upper()} ({confidence:.2f})"
+
+interface = gr.Interface(
+    fn=predict_emotion,
+    inputs=gr.Image(type="numpy", label="Upload Cartoon Image"),
+    outputs=gr.Textbox(label="Predicted Emotion"),
+    title="🎭 Cartoon Emotion Classifier",
+    description="Upload a cartoon image to detect emotions: Happy, Sad, Angry, Surprise, or Unknown."
+)
+
+interface.launch(share=True)
